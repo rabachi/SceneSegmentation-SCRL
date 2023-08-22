@@ -9,3 +9,5 @@ __pycache__/
 *.log
 *.txt
 *.pth
+*.mp4
+demo/data/

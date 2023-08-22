@@ -9,6 +9,47 @@ import cv2
 from torchvision import transforms
 from torch.utils.data import DataLoader
 
+class Custom_SingleShot_Dataset(torch.utils.data.Dataset):
+    def __init__(self, img_path, transform,
+        frame_per_shot = 3):
+        self.img_path = img_path
+        self.frame_per_shot = frame_per_shot
+        self.transform = transform
+        self.idx_map = {}
+        data_length = 0
+        for filename in os.listdir(img_path):
+            if filename.startswith('shot_'):
+                shot_name = filename.split('_')[1]  
+                self.idx_map[data_length] = (shot_name, 0)
+                data_length += 1
+
+    def __len__(self):
+        return len(self.idx_map.keys())
+
+    def _process(self, idx):
+        _id, label = self.idx_map[idx]
+        img_path_0 =  f'{self.img_path}/shot_{_id}_img_0.jpg'
+        img_path_1 =  f'{self.img_path}/shot_{_id}_img_1.jpg'
+        img_path_2 =  f'{self.img_path}/shot_{_id}_img_2.jpg'
+        #print(os.path.exists(img_path_0), os.path.exists(img_path_1), os.path.exists(img_path_2))
+        img_0 = cv2.cvtColor(cv2.imread(img_path_0), cv2.COLOR_BGR2RGB)
+        img_1 = cv2.cvtColor(cv2.imread(img_path_1), cv2.COLOR_BGR2RGB)
+        img_2 = cv2.cvtColor(cv2.imread(img_path_2), cv2.COLOR_BGR2RGB)
+        data_0 = self.transform(img_0)
+        data_1 = self.transform(img_1)
+        data_2 = self.transform(img_2)
+        data = torch.cat([data_0, data_1, data_2], axis=0)
+        label = int(label)
+        # According to LGSS[1]
+        # [1] https://arxiv.org/abs/2004.02678
+        # if label == -1:
+            # label = 1
+        return data, label, (_id, _id)
+
+    def __getitem__(self, idx):
+        return self._process(idx)
+
+
 class MovieNet_SingleShot_Dataset(torch.utils.data.Dataset):
     def __init__(self, img_path, shot_info_path, transform,
         frame_per_shot = 3, _Type='train'):
@@ -36,6 +77,7 @@ class MovieNet_SingleShot_Dataset(torch.utils.data.Dataset):
         img_path_0 =  f'{self.img_path}/{imdb}/shot_{_id}_img_0.jpg'
         img_path_1 =  f'{self.img_path}/{imdb}/shot_{_id}_img_1.jpg'
         img_path_2 =  f'{self.img_path}/{imdb}/shot_{_id}_img_2.jpg'
+        #print(os.path.exists(img_path_0), os.path.exists(img_path_1), os.path.exists(img_path_2))
         img_0 = cv2.cvtColor(cv2.imread(img_path_0), cv2.COLOR_BGR2RGB)
         img_1 = cv2.cvtColor(cv2.imread(img_path_1), cv2.COLOR_BGR2RGB)
         img_2 = cv2.cvtColor(cv2.imread(img_path_2), cv2.COLOR_BGR2RGB)
@@ -49,7 +91,6 @@ class MovieNet_SingleShot_Dataset(torch.utils.data.Dataset):
         if label == -1:
             label = 1
         return data, label, (imdb, _id)
-
 
     def __getitem__(self, idx):
         return self._process(idx)
@@ -67,13 +108,22 @@ def get_loader(cfg, _Type='train'):
             transforms.ToTensor(),
             normalize,
     ])
-    dataset = MovieNet_SingleShot_Dataset(
-        img_path = cfg.shot_img_path,
-        shot_info_path = cfg.shot_info_path,
-        transform = _transform,
-        frame_per_shot = cfg.frame_per_shot,
-        _Type=_Type,
-    )
+
+    if cfg.use_movienet:
+        dataset = MovieNet_SingleShot_Dataset(
+            img_path = cfg.shot_img_path,
+            shot_info_path = cfg.shot_info_path,
+            transform = _transform,
+            frame_per_shot = cfg.frame_per_shot,
+            _Type=_Type,
+        )
+    else:
+        dataset = Custom_SingleShot_Dataset(
+            img_path = cfg.shot_img_path,
+            transform = _transform,
+            frame_per_shot = cfg.frame_per_shot
+        )
+
     loader = DataLoader(
         dataset, batch_size=cfg.bs,  drop_last=False,
         shuffle=False, num_workers=cfg.worker_num, pin_memory=True
@@ -154,7 +204,7 @@ def extract_features(cfg):
             filename, 
             log_interval=100
         )
-        to_log(cfg, f'{_T} embeddings are saved in {filename}!\n')
+        to_log(cfg, f'{cfg.shot_info_path} with {_T} embeddings are saved in {filename}!\n')
 
 
 def to_log(cfg, content, echo=True):
@@ -169,11 +219,12 @@ def get_config():
     parser.add_argument('--shot_info_path', type=str, 
         default='./data/movie1K.scene_seg_318_name_index_shotnum_label.v1.json')
     parser.add_argument('--shot_img_path', type=str, default='./MovieNet_unzip/240P/')
+    parser.add_argument('--use_movienet', action='store_true')
     parser.add_argument('--Type', type=str, default='train', choices=['train','test','val','all'])
     parser.add_argument('--model_name', type=str, default='resnet50')
     parser.add_argument('--frame_per_shot', type=int, default=3)
     parser.add_argument('--shot_num', type=int, default=1)
-    parser.add_argument('--worker_num', type=int, default=16)
+    parser.add_argument('--worker_num', type=int, default=4)
     parser.add_argument('--bs', type=int, default=64)
     parser.add_argument('--save_dir', type=str, default='./embeddings/')
     parser.add_argument('--gpu-id', type=str, default='0')
